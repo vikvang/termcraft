@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "termcraft-3d"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crossterm",
  "rand",

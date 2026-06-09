@@ -53,6 +53,36 @@ pub const RECIPES: &[Recipe] = &[
     },
 ];
 
+/// How long (in ticks) a key press counts as "held" when we can't trust
+/// release events (key auto-repeat refreshes it while genuinely held).
+pub const HOLD_GRACE_TICKS: u64 = 10;
+
+/// Tracks a possibly-held key. Some terminals claim kitty keyboard support
+/// but never deliver release events, which would leave a naive flag stuck
+/// forever. Until a real release event is observed, a hold only stays
+/// active for a short grace period after the last press/repeat.
+#[derive(Clone, Copy, Default)]
+pub struct KeyHold {
+    down: bool,
+    last_seen: u64,
+}
+
+impl KeyHold {
+    pub fn press(&mut self, now: u64) {
+        self.down = true;
+        self.last_seen = now;
+    }
+
+    pub fn release(&mut self) {
+        self.down = false;
+    }
+
+    pub fn active(&self, now: u64, trust_releases: bool) -> bool {
+        self.down
+            && (trust_releases || now.saturating_sub(self.last_seen) <= HOLD_GRACE_TICKS)
+    }
+}
+
 pub struct Game {
     pub world: World,
     pub seed: u64,
@@ -76,9 +106,12 @@ pub struct Game {
     /// True when the terminal reports key release events (kitty protocol),
     /// enabling continuous hold-to-move instead of per-keypress nudges.
     hold_mode: bool,
-    held_left: bool,
-    held_right: bool,
-    held_jump: bool,
+    held_left: KeyHold,
+    held_right: KeyHold,
+    held_jump: KeyHold,
+    /// Set once any key release event arrives, proving the terminal
+    /// actually reports them.
+    saw_release: bool,
     last_damage_tick: u64,
     zombie_hit_cooldown: u64,
     rng: StdRng,
@@ -110,9 +143,10 @@ impl Game {
             move_dir: 0,
             move_timer: 0,
             hold_mode: false,
-            held_left: false,
-            held_right: false,
-            held_jump: false,
+            held_left: KeyHold::default(),
+            held_right: KeyHold::default(),
+            held_jump: KeyHold::default(),
+            saw_release: false,
             last_damage_tick: 0,
             zombie_hit_cooldown: 0,
             rng: StdRng::seed_from_u64(seed ^ 0xC0FFEE),
@@ -300,11 +334,13 @@ impl Game {
 
     pub fn on_key(&mut self, k: KeyEvent) {
         if k.kind == KeyEventKind::Release {
+            // Seeing any release proves the terminal reports them reliably.
+            self.saw_release = true;
             match k.code {
-                KeyCode::Char('a') | KeyCode::Char('A') => self.held_left = false,
-                KeyCode::Char('d') | KeyCode::Char('D') => self.held_right = false,
+                KeyCode::Char('a') | KeyCode::Char('A') => self.held_left.release(),
+                KeyCode::Char('d') | KeyCode::Char('D') => self.held_right.release(),
                 KeyCode::Char('w') | KeyCode::Char('W') | KeyCode::Char(' ') => {
-                    self.held_jump = false
+                    self.held_jump.release()
                 }
                 _ => {}
             }
@@ -350,17 +386,17 @@ impl Game {
         match k.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('a') | KeyCode::Char('A') => {
-                self.held_left = true;
+                self.held_left.press(self.time);
                 self.move_dir = -1;
                 self.move_timer = 4;
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
-                self.held_right = true;
+                self.held_right.press(self.time);
                 self.move_dir = 1;
                 self.move_timer = 4;
             }
             KeyCode::Char('w') | KeyCode::Char('W') | KeyCode::Char(' ') => {
-                self.held_jump = true;
+                self.held_jump.press(self.time);
                 self.player.try_jump(&self.world)
             }
             KeyCode::Left => {
@@ -429,11 +465,13 @@ impl Game {
         // continuously; otherwise fall back to a short timer refreshed by
         // key auto-repeat.
         if self.hold_mode {
-            let dir = self.held_right as i32 - self.held_left as i32;
+            let trust = self.saw_release;
+            let dir = self.held_right.active(self.time, trust) as i32
+                - self.held_left.active(self.time, trust) as i32;
             if dir != 0 {
                 self.player.vx = dir as f32 * 0.55;
             }
-            if self.held_jump {
+            if self.held_jump.active(self.time, trust) {
                 self.player.try_jump(&self.world);
             }
         } else if self.move_timer > 0 {
@@ -617,9 +655,10 @@ impl Game {
             move_dir: 0,
             move_timer: 0,
             hold_mode: false,
-            held_left: false,
-            held_right: false,
-            held_jump: false,
+            held_left: KeyHold::default(),
+            held_right: KeyHold::default(),
+            held_jump: KeyHold::default(),
+            saw_release: false,
             last_damage_tick: data.time,
             zombie_hit_cooldown: 0,
             rng: StdRng::seed_from_u64(data.seed ^ data.time),

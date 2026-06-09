@@ -7,7 +7,7 @@ use crossterm::event::{
 use serde::{Deserialize, Serialize};
 
 use crate::block::Block;
-use crate::game::{DAY_LEN, PLAYER_MAX_HP, RECIPES};
+use crate::game::{KeyHold, DAY_LEN, PLAYER_MAX_HP, RECIPES};
 use crate::world3::{World3, H3};
 
 pub const REACH3: f32 = 5.0;
@@ -125,11 +125,14 @@ pub struct Game3 {
     /// True when the terminal reports key release events (kitty protocol),
     /// enabling continuous hold-to-move instead of per-keypress nudges.
     hold_mode: bool,
-    held_w: bool,
-    held_s: bool,
-    held_a: bool,
-    held_d: bool,
-    held_jump: bool,
+    held_w: KeyHold,
+    held_s: KeyHold,
+    held_a: KeyHold,
+    held_d: KeyHold,
+    held_jump: KeyHold,
+    /// Set once any key release event arrives, proving the terminal
+    /// actually reports them.
+    saw_release: bool,
     /// True while swimming and pushing horizontally against a solid block
     /// (used to kick the player up so they can climb out of water).
     swim_blocked: bool,
@@ -168,11 +171,12 @@ impl Game3 {
             move_strafe: 0.0,
             move_timer: 0,
             hold_mode: false,
-            held_w: false,
-            held_s: false,
-            held_a: false,
-            held_d: false,
-            held_jump: false,
+            held_w: KeyHold::default(),
+            held_s: KeyHold::default(),
+            held_a: KeyHold::default(),
+            held_d: KeyHold::default(),
+            held_jump: KeyHold::default(),
+            saw_release: false,
             swim_blocked: false,
             last_damage_tick: 0,
             last_mouse: None,
@@ -406,12 +410,14 @@ impl Game3 {
 
     pub fn on_key(&mut self, k: KeyEvent) {
         if k.kind == KeyEventKind::Release {
+            // Seeing any release proves the terminal reports them reliably.
+            self.saw_release = true;
             match k.code {
-                KeyCode::Char('w') | KeyCode::Char('W') => self.held_w = false,
-                KeyCode::Char('s') | KeyCode::Char('S') => self.held_s = false,
-                KeyCode::Char('a') | KeyCode::Char('A') => self.held_a = false,
-                KeyCode::Char('d') | KeyCode::Char('D') => self.held_d = false,
-                KeyCode::Char(' ') => self.held_jump = false,
+                KeyCode::Char('w') | KeyCode::Char('W') => self.held_w.release(),
+                KeyCode::Char('s') | KeyCode::Char('S') => self.held_s.release(),
+                KeyCode::Char('a') | KeyCode::Char('A') => self.held_a.release(),
+                KeyCode::Char('d') | KeyCode::Char('D') => self.held_d.release(),
+                KeyCode::Char(' ') => self.held_jump.release(),
                 _ => {}
             }
             return;
@@ -456,27 +462,27 @@ impl Game3 {
         match k.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('w') | KeyCode::Char('W') => {
-                self.held_w = true;
+                self.held_w.press(self.time);
                 self.move_fwd = 1.0;
                 self.move_timer = 4;
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
-                self.held_s = true;
+                self.held_s.press(self.time);
                 self.move_fwd = -1.0;
                 self.move_timer = 4;
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
-                self.held_a = true;
+                self.held_a.press(self.time);
                 self.move_strafe = -1.0;
                 self.move_timer = 4;
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
-                self.held_d = true;
+                self.held_d.press(self.time);
                 self.move_strafe = 1.0;
                 self.move_timer = 4;
             }
             KeyCode::Char(' ') => {
-                self.held_jump = true;
+                self.held_jump.press(self.time);
                 self.jump_or_swim();
             }
             KeyCode::Left => self.yaw -= LOOK_STEP,
@@ -536,9 +542,12 @@ impl Game3 {
         // held key flags drive movement continuously; otherwise fall back to a
         // short timer refreshed by key auto-repeat.
         let (mf, ms) = if self.hold_mode {
+            let trust = self.saw_release;
             (
-                (self.held_w as i32 - self.held_s as i32) as f32,
-                (self.held_d as i32 - self.held_a as i32) as f32,
+                (self.held_w.active(self.time, trust) as i32
+                    - self.held_s.active(self.time, trust) as i32) as f32,
+                (self.held_d.active(self.time, trust) as i32
+                    - self.held_a.active(self.time, trust) as i32) as f32,
             )
         } else if self.move_timer > 0 {
             self.move_timer -= 1;
@@ -570,7 +579,7 @@ impl Game3 {
         self.swim_blocked = (blocked_x || blocked_z) && self.in_water();
 
         // Holding space keeps jumping / swimming up.
-        if self.hold_mode && self.held_jump {
+        if self.hold_mode && self.held_jump.active(self.time, self.saw_release) {
             self.jump_or_swim();
         }
 
@@ -698,11 +707,12 @@ impl Game3 {
             move_strafe: 0.0,
             move_timer: 0,
             hold_mode: false,
-            held_w: false,
-            held_s: false,
-            held_a: false,
-            held_d: false,
-            held_jump: false,
+            held_w: KeyHold::default(),
+            held_s: KeyHold::default(),
+            held_a: KeyHold::default(),
+            held_d: KeyHold::default(),
+            held_jump: KeyHold::default(),
+            saw_release: false,
             swim_blocked: false,
             last_damage_tick: data.time,
             last_mouse: None,
@@ -751,6 +761,18 @@ mod tests {
         let hit = raycast(&g.world, g.eye(), (0.0, -1.0, 0.0), 10.0).expect("ground below");
         assert!(hit.block.is_solid());
         assert_eq!(hit.ny, 1); // entered through the top face
+    }
+
+    /// Sends a release of an unused key, marking the terminal as one that
+    /// reliably reports release events.
+    fn enable_trusted_releases(g: &mut Game3) {
+        use crossterm::event::KeyEventState;
+        g.on_key(KeyEvent {
+            code: KeyCode::Char('n'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        });
     }
 
     #[test]
@@ -803,6 +825,7 @@ mod tests {
         g.yaw = 0.0;
         assert!(g.in_water());
         // Hold forward + space and swim at the bank.
+        enable_trusted_releases(&mut g);
         g.on_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
         g.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         // Succeed as soon as the player stands clear of the water on the
@@ -831,6 +854,7 @@ mod tests {
         for _ in 0..100 {
             g.tick(); // settle
         }
+        enable_trusted_releases(&mut g);
         let start = (g.px, g.pz);
         // Press 'w' once (no repeats) and keep ticking: should keep moving.
         g.on_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
@@ -855,6 +879,33 @@ mod tests {
         }
         let drift = (g.px - stopped_at.0).hypot(g.pz - stopped_at.1);
         assert!(drift < 0.2, "expected to stop after release, drifted {drift}");
+    }
+
+    #[test]
+    fn movement_expires_when_releases_never_arrive() {
+        // Regression: a terminal that claims kitty support but never sends
+        // release events must not leave the player moving/jumping forever.
+        let mut g = Game3::new(9);
+        g.set_hold_mode(true);
+        for _ in 0..100 {
+            g.tick(); // settle
+        }
+        g.on_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        g.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        for _ in 0..60 {
+            g.tick(); // never send a release
+        }
+        let pos = (g.px, g.pz);
+        let mut jumped = false;
+        for _ in 0..30 {
+            g.tick();
+            if !g.on_ground && !g.in_water() && g.vy > 0.1 {
+                jumped = true;
+            }
+        }
+        let drift = (g.px - pos.0).hypot(g.pz - pos.1);
+        assert!(drift < 0.2, "still moving without key repeats, drifted {drift}");
+        assert!(!jumped, "still jumping without key repeats");
     }
 
     #[test]
