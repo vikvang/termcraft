@@ -1,6 +1,6 @@
 [package]
 name = "termcraft-3d"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A Minecraft-inspired first-person 3D sandbox game for your terminal"
 license = "MIT"
