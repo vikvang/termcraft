@@ -255,9 +255,66 @@ pub fn draw(f: &mut Frame, g: &mut Game3) {
     if g.crafting_open {
         draw_crafting(f, g, area);
     }
+    if g.help_open {
+        draw_help(
+            f,
+            area,
+            &[
+                ("Movement", ""),
+                ("  w / a / s / d", "move (relative to where you look)"),
+                ("  arrow keys", "look around (or drag the mouse)"),
+                ("  space", "jump / swim up (hold to keep jumping)"),
+                ("Actions", ""),
+                ("  x / Enter / left-click", "mine the block under the crosshair"),
+                ("  z / right-click", "place selected block on targeted face"),
+                ("  1-9", "select hotbar slot"),
+                ("  c", "crafting menu"),
+                ("Game", ""),
+                ("  F5 / Ctrl+S", "save"),
+                ("  h / ?", "toggle this help"),
+                ("  q / Esc", "quit (autosaves)"),
+                ("", ""),
+                ("Tip", "craft torches before nightfall - caves are dark!"),
+            ],
+        );
+    }
     if g.game_over {
         draw_game_over(f, area);
     }
+}
+
+pub fn draw_help(f: &mut Frame, area: Rect, entries: &[(&str, &str)]) {
+    let rect = centered(area, 64, entries.len() as u16 + 2);
+    f.render_widget(Clear, rect);
+    let lines: Vec<Line> = entries
+        .iter()
+        .map(|(key, desc)| {
+            if desc.is_empty() {
+                Line::from(Span::styled(
+                    key.to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(255, 220, 100))
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{key:<26}"),
+                        Style::default().fg(Color::Rgb(150, 220, 150)),
+                    ),
+                    Span::styled(
+                        desc.to_string(),
+                        Style::default().fg(Color::Rgb(210, 210, 220)),
+                    ),
+                ])
+            }
+        })
+        .collect();
+    let block = WBlock::default()
+        .title(" Controls - h or Esc to close ")
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Rgb(25, 25, 32)));
+    f.render_widget(Paragraph::new(lines).block(block), rect);
 }
 
 fn draw_hud(f: &mut Frame, g: &Game3, area: Rect, hud_h: u16) {
@@ -344,7 +401,7 @@ fn draw_hud(f: &mut Frame, g: &Game3, area: Rect, hud_h: u16) {
         Rect::new(area.x, y0 + 1, area.width, 1),
     );
 
-    let help = "w/a/s/d move  ←↑→↓ look  space jump  x/click mine  z/right-click place  1-9 hotbar  c craft  F5 save  q quit";
+    let help = "h help  w/a/s/d move  ←↑→↓ look  space jump  x mine  z place  c craft  q quit";
     f.render_widget(
         Paragraph::new(help).style(
             Style::default()

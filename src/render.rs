@@ -190,6 +190,29 @@ pub fn draw(f: &mut Frame, game: &mut Game) {
     if game.crafting_open {
         draw_crafting(f, game, area);
     }
+    if game.help_open {
+        crate::render3::draw_help(
+            f,
+            area,
+            &[
+                ("Movement", ""),
+                ("  a / d", "move left / right"),
+                ("  w / space", "jump (swim up in water)"),
+                ("Actions", ""),
+                ("  arrow keys", "aim the target cursor"),
+                ("  x / Enter / left-click", "mine block / attack zombie"),
+                ("  z / right-click", "place selected block"),
+                ("  1-9", "select hotbar slot"),
+                ("  c", "crafting menu"),
+                ("Game", ""),
+                ("  F5 / Ctrl+S", "save"),
+                ("  h / ?", "toggle this help"),
+                ("  q / Esc", "quit (autosaves)"),
+                ("", ""),
+                ("Tip", "zombies come out at night - build shelter and torches!"),
+            ],
+        );
+    }
     if game.game_over {
         draw_game_over(f, area);
     }
@@ -287,7 +310,7 @@ fn draw_hud(f: &mut Frame, game: &Game, area: Rect, hud_h: u16) {
     );
 
     // Line 3: help
-    let help = "a/d move  w/space jump  ←↑→↓ aim  x/click mine  z/right-click place  1-9 select  c craft  F5 save  q quit";
+    let help = "h help  a/d move  w/space jump  ←↑→↓ aim  x mine  z place  c craft  q quit";
     f.render_widget(
         Paragraph::new(help).style(
             Style::default()

@@ -116,6 +116,7 @@ pub struct Game3 {
     pub should_quit: bool,
     pub crafting_open: bool,
     pub craft_sel: usize,
+    pub help_open: bool,
     pub msg: Option<(String, u64)>,
     pub game_over: bool,
     move_fwd: f32,
@@ -160,6 +161,7 @@ impl Game3 {
             should_quit: false,
             crafting_open: false,
             craft_sel: 0,
+            help_open: false,
             msg: None,
             game_over: false,
             move_fwd: 0.0,
@@ -175,7 +177,7 @@ impl Game3 {
             last_damage_tick: 0,
             last_mouse: None,
         };
-        g.say("Welcome to TermCraft 3D! Aim with arrows, mine with x.");
+        g.say("Welcome to TermCraft 3D! Press h for help, x to mine.");
         g
     }
 
@@ -438,6 +440,15 @@ impl Game3 {
             }
             return;
         }
+        if self.help_open {
+            if matches!(
+                k.code,
+                KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('?') | KeyCode::Char('q')
+            ) {
+                self.help_open = false;
+            }
+            return;
+        }
         if k.code == KeyCode::Char('s') && k.modifiers.contains(KeyModifiers::CONTROL) {
             self.do_save();
             return;
@@ -478,6 +489,9 @@ impl Game3 {
                 self.crafting_open = true;
                 self.craft_sel = 0;
             }
+            KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('?') | KeyCode::F(1) => {
+                self.help_open = true;
+            }
             KeyCode::Char(ch @ '1'..='9') => {
                 self.selected = ch as usize - '1' as usize;
             }
@@ -487,7 +501,7 @@ impl Game3 {
     }
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
-        if self.game_over || self.crafting_open {
+        if self.game_over || self.crafting_open || self.help_open {
             return;
         }
         match m.kind {
@@ -677,6 +691,7 @@ impl Game3 {
             should_quit: false,
             crafting_open: false,
             craft_sel: 0,
+            help_open: false,
             msg: None,
             game_over: false,
             move_fwd: 0.0,
@@ -736,6 +751,19 @@ mod tests {
         let hit = raycast(&g.world, g.eye(), (0.0, -1.0, 0.0), 10.0).expect("ground below");
         assert!(hit.block.is_solid());
         assert_eq!(hit.ny, 1); // entered through the top face
+    }
+
+    #[test]
+    fn help_menu_toggles_without_quitting() {
+        let mut g = Game3::new(9);
+        g.on_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert!(g.help_open);
+        // Keys other than the close keys do nothing while help is open.
+        g.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(g.help_open);
+        g.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!g.help_open);
+        assert!(!g.should_quit);
     }
 
     #[test]

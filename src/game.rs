@@ -66,6 +66,7 @@ pub struct Game {
     pub should_quit: bool,
     pub crafting_open: bool,
     pub craft_sel: usize,
+    pub help_open: bool,
     pub msg: Option<(String, u64)>,
     pub game_over: bool,
     pub map_area: Rect,
@@ -101,6 +102,7 @@ impl Game {
             should_quit: false,
             crafting_open: false,
             craft_sel: 0,
+            help_open: false,
             msg: None,
             game_over: false,
             map_area: Rect::new(0, 0, 1, 1),
@@ -332,6 +334,15 @@ impl Game {
             }
             return;
         }
+        if self.help_open {
+            if matches!(
+                k.code,
+                KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('?') | KeyCode::Char('q')
+            ) {
+                self.help_open = false;
+            }
+            return;
+        }
         if k.code == KeyCode::Char('s') && k.modifiers.contains(KeyModifiers::CONTROL) {
             self.do_save();
             return;
@@ -374,6 +385,9 @@ impl Game {
                 self.crafting_open = true;
                 self.craft_sel = 0;
             }
+            KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('?') | KeyCode::F(1) => {
+                self.help_open = true;
+            }
             KeyCode::Char(ch @ '1'..='9') => {
                 self.selected = ch as usize - '1' as usize;
             }
@@ -383,7 +397,7 @@ impl Game {
     }
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
-        if self.game_over || self.crafting_open {
+        if self.game_over || self.crafting_open || self.help_open {
             return;
         }
         let a = self.map_area;
@@ -595,6 +609,7 @@ impl Game {
             should_quit: false,
             crafting_open: false,
             craft_sel: 0,
+            help_open: false,
             msg: None,
             game_over: false,
             map_area: Rect::new(0, 0, 1, 1),
