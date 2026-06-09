@@ -33,9 +33,11 @@ termcraft
 On macOS you may need to clear the quarantine flag the first time:
 `xattr -d com.apple.quarantine ./termcraft`
 
-**Or build from source** with Rust installed:
+**Or install with cargo** (Rust required):
 
 ```sh
+cargo install termcraft-3d          # from crates.io (binary is `termcraft`)
+# or:
 cargo install --git https://github.com/vikvang/termcraft
 # or from a local checkout:
 cargo install --path .
