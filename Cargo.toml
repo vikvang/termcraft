@@ -1,0 +1,25 @@
+[package]
+name = "termcraft"
+version = "0.1.0"
+edition = "2021"
+description = "A Minecraft-inspired first-person 3D sandbox game for your terminal"
+license = "MIT"
+repository = "https://github.com/vikvang/termcraft"
+readme = "README.md"
+keywords = ["game", "terminal", "tui", "voxel", "sandbox"]
+categories = ["games", "command-line-utilities"]
+
+[[bin]]
+name = "termcraft"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
