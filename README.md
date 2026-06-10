@@ -1,5 +1,8 @@
 # TermCraft
 
+> [!NOTE]
+> ❤️ Built with [warp.dev](https://warp.dev)
+
 A Minecraft-inspired sandbox game that runs entirely in your terminal — in first-person 3D. Built in Rust with [ratatui](https://ratatui.rs); the 3D view is a software voxel raycaster drawn with half-block characters and truecolor.
 
 ## Features
