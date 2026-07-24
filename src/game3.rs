@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::block::Block;
 use crate::game::{KeyHold, DAY_LEN, PLAYER_MAX_HP, RECIPES};
+use crate::net::{Net, NetEvent, Peer, PlayerId, PlayerState, Role};
 use crate::world3::{World3, H3};
 
 pub const REACH3: f32 = 5.0;
@@ -23,6 +24,77 @@ const SWIM_UP: f32 = 0.16;
 const SWIM_MAX_RISE: f32 = 0.35;
 const SAFE_FALL: f32 = -0.62;
 const LOOK_STEP: f32 = 0.10;
+/// Damage one punch deals to another player.
+const PUNCH_DMG: i32 = 2;
+/// Peers we haven't heard from in this many ticks are assumed gone.
+const PEER_TIMEOUT: u64 = 60;
+/// Republish our state at least this often, even standing perfectly still,
+/// so nobody times us out and newcomers see us right away.
+const STATE_HEARTBEAT: u64 = 10;
+/// How often the host publishes its world clock.
+const TIME_SYNC_EVERY: u64 = 100;
+/// Chat lines older than this stop being drawn.
+pub const CHAT_TTL: u64 = 400;
+pub const CHAT_LINES: usize = 6;
+/// Half-width of another player's hitbox (slightly wider than the collider so
+/// punches connect the way you'd expect).
+const PEER_HALF_W: f32 = 0.35;
+
+/// A line in the chat log: who said it, what they said, and when.
+pub type ChatLine = (String, String, u64);
+
+/// Slab test of a ray against an axis-aligned box. Returns the entry distance.
+pub fn ray_aabb(
+    o: (f32, f32, f32),
+    d: (f32, f32, f32),
+    min: (f32, f32, f32),
+    max: (f32, f32, f32),
+) -> Option<f32> {
+    let mut t0 = 0.0f32;
+    let mut t1 = f32::INFINITY;
+    let axes = [
+        (o.0, d.0, min.0, max.0),
+        (o.1, d.1, min.1, max.1),
+        (o.2, d.2, min.2, max.2),
+    ];
+    for (o, d, lo, hi) in axes {
+        if d.abs() < 1e-6 {
+            if o < lo || o > hi {
+                return None; // parallel and outside the slab
+            }
+            continue;
+        }
+        let (mut a, mut b) = ((lo - o) / d, (hi - o) / d);
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        t0 = t0.max(a);
+        t1 = t1.min(b);
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some(t0)
+}
+
+/// The world-space box a peer's avatar occupies.
+pub fn peer_box(st: &PlayerState) -> ((f32, f32, f32), (f32, f32, f32)) {
+    (
+        (st.x - PEER_HALF_W, st.y, st.z - PEER_HALF_W),
+        (st.x + PEER_HALF_W, st.y + PLAYER_H, st.z + PEER_HALF_W),
+    )
+}
+
+/// True when a peer is standing in the cell someone is trying to build in.
+fn peer_overlaps_cell(p: &Peer, x: i32, y: i32, z: i32) -> bool {
+    let (min, max) = peer_box(&p.st);
+    min.0 < (x + 1) as f32
+        && max.0 > x as f32
+        && min.1 < (y + 1) as f32
+        && max.1 > y as f32
+        && min.2 < (z + 1) as f32
+        && max.2 > z as f32
+}
 
 /// A block hit by a ray: cell coords, the face normal it entered through, and distance.
 pub struct Hit {
@@ -119,6 +191,21 @@ pub struct Game3 {
     pub help_open: bool,
     pub msg: Option<(String, u64)>,
     pub game_over: bool,
+    // multiplayer
+    /// `None` in single player, or after the link drops.
+    pub net: Option<Net>,
+    pub peers: BTreeMap<PlayerId, Peer>,
+    pub name: String,
+    pub chat: Vec<ChatLine>,
+    pub chat_open: bool,
+    pub chat_input: String,
+    pub players_open: bool,
+    /// Last state published to the session, so we only send real changes.
+    last_sent: PlayerState,
+    /// Where this session saves, and whether it's allowed to (guests must not
+    /// clobber the host's file).
+    save_path: PathBuf,
+    owns_save: bool,
     move_fwd: f32,
     move_strafe: f32,
     move_timer: u32,
@@ -142,9 +229,16 @@ pub struct Game3 {
 
 impl Game3 {
     pub fn new(seed: u64) -> Game3 {
-        let world = World3::generate(seed);
+        let mut g = Game3::from_world(seed, World3::generate(seed));
+        g.say("Welcome to TermCraft 3D! Press h for help, x to mine.");
+        g
+    }
+
+    /// Builds a fresh session around an existing world (used when a guest
+    /// receives the host's world snapshot).
+    pub fn from_world(seed: u64, world: World3) -> Game3 {
         let (sx, sy, sz) = world.spawn;
-        let mut g = Game3 {
+        Game3 {
             world,
             seed,
             px: sx,
@@ -180,9 +274,17 @@ impl Game3 {
             swim_blocked: false,
             last_damage_tick: 0,
             last_mouse: None,
-        };
-        g.say("Welcome to TermCraft 3D! Press h for help, x to mine.");
-        g
+            net: None,
+            peers: BTreeMap::new(),
+            name: crate::net::default_name(),
+            chat: Vec::new(),
+            chat_open: false,
+            chat_input: String::new(),
+            players_open: false,
+            last_sent: PlayerState::default(),
+            save_path: save3_path(),
+            owns_save: true,
+        }
     }
 
     pub fn say(&mut self, s: &str) {
@@ -224,6 +326,209 @@ impl Game3 {
 
     pub fn target(&self) -> Option<Hit> {
         raycast(&self.world, self.eye(), self.forward(), REACH3)
+    }
+
+    // ---------------------------------------------------------- multiplayer
+
+    /// Joins this session to a network link. Also adopts the link's player
+    /// name, which is what other people see.
+    pub fn attach_net(&mut self, net: Net) {
+        self.name = net.name().to_string();
+        let (role, addr, seed) = (net.role(), net.addr(), self.seed);
+        self.net = Some(net);
+        let m = match role {
+            Role::Host => format!("Hosting seed {seed} on {addr} as {}.", self.name),
+            Role::Client => format!("Joined seed {seed} at {addr} as {}.", self.name),
+        };
+        self.log_chat("*", &m);
+        self.say(&m);
+    }
+
+    /// Points this session at a specific save file. Guests pass `owns: false`
+    /// so they never overwrite the host's world.
+    pub fn set_save(&mut self, path: PathBuf, owns: bool) {
+        self.save_path = path;
+        self.owns_save = owns;
+    }
+
+    pub fn owns_save(&self) -> bool {
+        self.owns_save
+    }
+
+    pub fn save_file(&self) -> &std::path::Path {
+        &self.save_path
+    }
+
+    pub fn is_multiplayer(&self) -> bool {
+        self.net.is_some()
+    }
+
+    /// Short badge for the HUD, e.g. `host 2`.
+    pub fn net_badge(&self) -> Option<String> {
+        let net = self.net.as_ref()?;
+        Some(format!("{} {}", net.role().label(), self.peers.len().max(0)))
+    }
+
+    pub fn log_chat(&mut self, from: &str, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.chat
+            .push((from.to_string(), text.to_string(), self.time));
+        // Keep the log bounded; only the tail is ever drawn.
+        if self.chat.len() > 64 {
+            let drop = self.chat.len() - 64;
+            self.chat.drain(0..drop);
+        }
+    }
+
+    /// Chat lines still worth drawing, oldest first.
+    pub fn recent_chat(&self) -> Vec<&ChatLine> {
+        let mut lines: Vec<&ChatLine> = self
+            .chat
+            .iter()
+            .filter(|(_, _, t)| self.time.saturating_sub(*t) < CHAT_TTL)
+            .collect();
+        if lines.len() > CHAT_LINES {
+            lines.drain(0..lines.len() - CHAT_LINES);
+        }
+        lines
+    }
+
+    fn send_chat_line(&mut self) {
+        let text = self.chat_input.trim().to_string();
+        self.chat_input.clear();
+        self.chat_open = false;
+        if text.is_empty() {
+            return;
+        }
+        let me = self.name.clone();
+        self.log_chat(&me, &text);
+        if let Some(net) = &mut self.net {
+            net.send_chat(&text);
+        }
+    }
+
+    /// The peer under the crosshair, if one is closer than any block.
+    pub fn peer_in_crosshair(&self) -> Option<(PlayerId, f32)> {
+        let eye = self.eye();
+        let dir = self.forward();
+        let wall = self.target().map(|h| h.t).unwrap_or(f32::INFINITY);
+        let mut best: Option<(PlayerId, f32)> = None;
+        for p in self.peers.values() {
+            let (min, max) = peer_box(&p.st);
+            let Some(t) = ray_aabb(eye, dir, min, max) else {
+                continue;
+            };
+            if t > REACH3 || t > wall {
+                continue;
+            }
+            if best.is_none_or(|(_, bt)| t < bt) {
+                best = Some((p.id, t));
+            }
+        }
+        best
+    }
+
+    /// Applies a block change locally and tells the session about it.
+    fn set_block_synced(&mut self, x: i32, y: i32, z: i32, b: Block) {
+        self.world.set(x, y, z, b);
+        if let Some(net) = &mut self.net {
+            net.send_block(x, y, z, b.to_u8());
+        }
+    }
+
+    fn take_damage(&mut self, dmg: i32, from: &str) {
+        if dmg <= 0 {
+            return;
+        }
+        self.hp -= dmg;
+        self.last_damage_tick = self.time;
+        let m = format!("{from} hit you!");
+        self.say(&m);
+        if self.hp <= 0 {
+            self.game_over = true;
+        }
+    }
+
+    /// Drains the network, applies what came in, and publishes our own state.
+    fn net_sync(&mut self) {
+        let Some(mut net) = self.net.take() else {
+            return;
+        };
+
+        // The world lives here, so the host encodes snapshots for joiners.
+        for id in net.take_snapshot_requests() {
+            let tiles = self.world.to_bytes();
+            net.send_snapshot(id, &tiles, self.world.spawn, self.time);
+        }
+
+        let mut dropped = None;
+        for ev in net.poll() {
+            match ev {
+                NetEvent::Peer { id, name, st } => {
+                    let entry = self.peers.entry(id).or_insert_with(|| Peer {
+                        id,
+                        name: name.clone(),
+                        st,
+                        last_seen: self.time,
+                    });
+                    entry.name = name;
+                    entry.st = st;
+                    entry.last_seen = self.time;
+                }
+                NetEvent::Left { id } => {
+                    self.peers.remove(&id);
+                }
+                NetEvent::SetBlock { x, y, z, b } => {
+                    // Remote edit: apply it, don't echo it back.
+                    self.world.set(x, y, z, Block::from_u8(b));
+                }
+                NetEvent::Chat { from, text } => self.log_chat(&from, &text),
+                NetEvent::Hurt { from, dmg } => self.take_damage(dmg, &from),
+                NetEvent::Time(t) => {
+                    if !net.is_authority() {
+                        self.time = t;
+                    }
+                }
+                NetEvent::Notice(n) => {
+                    self.log_chat("*", &n);
+                    self.say(&n);
+                }
+                NetEvent::Disconnected(why) => dropped = Some(why),
+            }
+        }
+
+        // Forget peers that went quiet (crash, kill -9, network drop).
+        let now = self.time;
+        self.peers
+            .retain(|_, p| now.saturating_sub(p.last_seen) < PEER_TIMEOUT);
+
+        let st = PlayerState {
+            x: self.px,
+            y: self.py,
+            z: self.pz,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            hp: self.hp,
+        };
+        if st != self.last_sent || self.time.is_multiple_of(STATE_HEARTBEAT) {
+            net.send_state(st);
+            self.last_sent = st;
+        }
+        if net.is_authority() && self.time.is_multiple_of(TIME_SYNC_EVERY) {
+            net.send_time(self.time);
+        }
+
+        match dropped {
+            Some(why) => {
+                self.peers.clear();
+                let m = format!("Multiplayer ended: {why}. Playing solo.");
+                self.log_chat("*", &m);
+                self.say(&m);
+            }
+            None => self.net = Some(net),
+        }
     }
 
     // ------------------------------------------------------------- inventory
@@ -272,6 +577,11 @@ impl Game3 {
     // ------------------------------------------------------------- actions
 
     fn mine(&mut self) {
+        // Another player standing between you and the block takes the hit.
+        if let Some((id, _)) = self.peer_in_crosshair() {
+            self.punch(id);
+            return;
+        }
         let Some(hit) = self.target() else {
             self.say("Nothing in reach.");
             return;
@@ -282,12 +592,25 @@ impl Game3 {
             }
             return;
         }
-        self.world.set(hit.x, hit.y, hit.z, Block::Air);
+        self.set_block_synced(hit.x, hit.y, hit.z, Block::Air);
         if let Some(drop) = hit.block.drops() {
             self.add_item(drop, 1);
             let m = format!("+1 {}", drop.name());
             self.say(&m);
         }
+    }
+
+    fn punch(&mut self, id: PlayerId) {
+        let name = self
+            .peers
+            .get(&id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "someone".to_string());
+        if let Some(net) = &mut self.net {
+            net.send_punch(id, PUNCH_DMG);
+        }
+        let m = format!("You punched {name}!");
+        self.say(&m);
     }
 
     fn place(&mut self) {
@@ -320,8 +643,15 @@ impl Game3 {
             self.say("You're standing there!");
             return;
         }
+        if b.is_solid() {
+            if let Some(p) = self.peers.values().find(|p| peer_overlaps_cell(p, tx, ty, tz)) {
+                let m = format!("{} is standing there!", p.name);
+                self.say(&m);
+                return;
+            }
+        }
         self.remove_item(b, 1);
-        self.world.set(tx, ty, tz, b);
+        self.set_block_synced(tx, ty, tz, b);
     }
 
     fn aabb_overlaps_cell(&self, x: i32, y: i32, z: i32) -> bool {
@@ -422,6 +752,27 @@ impl Game3 {
             }
             return;
         }
+        // Chat swallows every key while it's open, so you can type "quit"
+        // without quitting.
+        if self.chat_open {
+            match k.code {
+                KeyCode::Esc => {
+                    self.chat_open = false;
+                    self.chat_input.clear();
+                }
+                KeyCode::Enter => self.send_chat_line(),
+                KeyCode::Backspace => {
+                    self.chat_input.pop();
+                }
+                KeyCode::Char(c) => {
+                    if self.chat_input.chars().count() < 100 && !c.is_control() {
+                        self.chat_input.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.game_over {
             match k.code {
                 KeyCode::Char('r') | KeyCode::Char('R') => self.respawn(),
@@ -501,13 +852,22 @@ impl Game3 {
             KeyCode::Char(ch @ '1'..='9') => {
                 self.selected = ch as usize - '1' as usize;
             }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                if self.is_multiplayer() {
+                    self.chat_open = true;
+                    self.chat_input.clear();
+                } else {
+                    self.say("Chat needs a multiplayer world (--seed <N>).");
+                }
+            }
+            KeyCode::Tab => self.players_open = !self.players_open,
             KeyCode::F(5) => self.do_save(),
             _ => {}
         }
     }
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
-        if self.game_over || self.crafting_open || self.help_open {
+        if self.game_over || self.crafting_open || self.help_open || self.chat_open {
             return;
         }
         match m.kind {
@@ -534,9 +894,12 @@ impl Game3 {
 
     pub fn tick(&mut self) {
         if self.game_over {
+            // Stay in the session while dead so chat and peers keep updating.
+            self.net_sync();
             return;
         }
         self.time += 1;
+        self.net_sync();
 
         // Movement intent relative to yaw (horizontal only). In hold mode the
         // held key flags drive movement continuously; otherwise fall back to a
@@ -641,6 +1004,11 @@ impl Game3 {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
+        if !self.owns_save {
+            return Err(std::io::Error::other(
+                "the host owns this world - nothing saved locally",
+            ));
+        }
         let data = Save3 {
             seed: self.seed,
             tiles: self.world.to_bytes(),
@@ -658,65 +1026,43 @@ impl Game3 {
                 .collect(),
             selected: self.selected,
         };
-        let path = save3_path();
-        if let Some(dir) = path.parent() {
+        if let Some(dir) = self.save_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let json = serde_json::to_string(&data)?;
-        std::fs::write(path, json)
+        std::fs::write(&self.save_path, json)
     }
 
     pub fn load() -> Option<Game3> {
-        let json = std::fs::read_to_string(save3_path()).ok()?;
+        Game3::load_from(&save3_path())
+    }
+
+    /// Loads a world from a specific save file, e.g. a per-seed shared world.
+    pub fn load_from(path: &std::path::Path) -> Option<Game3> {
+        let json = std::fs::read_to_string(path).ok()?;
         let data: Save3 = serde_json::from_str(&json).ok()?;
         let world = World3::from_bytes(&data.tiles, data.spawn)?;
-        let mut hotbar = [None; 9];
+        let mut g = Game3::from_world(data.seed, world);
         for (i, v) in data.hotbar.iter().take(9).enumerate() {
             if *v >= 0 {
-                hotbar[i] = Some(Block::from_u8(*v as u8));
+                g.hotbar[i] = Some(Block::from_u8(*v as u8));
             }
         }
-        let mut g = Game3 {
-            world,
-            seed: data.seed,
-            px: data.pos.0,
-            py: data.pos.1,
-            pz: data.pos.2,
-            vx: 0.0,
-            vy: 0.0,
-            vz: 0.0,
-            yaw: data.yaw,
-            pitch: data.pitch,
-            on_ground: false,
-            hp: data.hp,
-            inv: data
-                .inv
-                .iter()
-                .map(|&(b, n)| (Block::from_u8(b), n))
-                .collect(),
-            hotbar,
-            selected: data.selected.min(8),
-            time: data.time,
-            should_quit: false,
-            crafting_open: false,
-            craft_sel: 0,
-            help_open: false,
-            msg: None,
-            game_over: false,
-            move_fwd: 0.0,
-            move_strafe: 0.0,
-            move_timer: 0,
-            hold_mode: false,
-            held_w: KeyHold::default(),
-            held_s: KeyHold::default(),
-            held_a: KeyHold::default(),
-            held_d: KeyHold::default(),
-            held_jump: KeyHold::default(),
-            saw_release: false,
-            swim_blocked: false,
-            last_damage_tick: data.time,
-            last_mouse: None,
-        };
+        g.px = data.pos.0;
+        g.py = data.pos.1;
+        g.pz = data.pos.2;
+        g.yaw = data.yaw;
+        g.pitch = data.pitch;
+        g.hp = data.hp;
+        g.inv = data
+            .inv
+            .iter()
+            .map(|&(b, n)| (Block::from_u8(b), n))
+            .collect();
+        g.selected = data.selected.min(8);
+        g.time = data.time;
+        g.last_damage_tick = data.time;
+        g.save_path = path.to_path_buf();
         g.say("World loaded. Welcome back!");
         Some(g)
     }
@@ -739,6 +1085,14 @@ struct Save3 {
 
 pub fn save3_path() -> PathBuf {
     crate::game::home_dir().join(".termcraft").join("save3d.json")
+}
+
+/// Worlds played with an explicit seed get their own file, so a shared seed
+/// keeps everyone's buildings between sessions.
+pub fn seed_save_path(seed: u64) -> PathBuf {
+    crate::game::home_dir()
+        .join(".termcraft")
+        .join(format!("world-{seed}.json"))
 }
 
 #[cfg(test)]
@@ -906,6 +1260,139 @@ mod tests {
         let drift = (g.px - pos.0).hypot(g.pz - pos.1);
         assert!(drift < 0.2, "still moving without key repeats, drifted {drift}");
         assert!(!jumped, "still jumping without key repeats");
+    }
+
+    /// Drops a peer right in front of the player, facing +x.
+    fn place_peer_in_front(g: &mut Game3, id: PlayerId) {
+        g.yaw = 0.0;
+        g.pitch = 0.0;
+        let st = PlayerState {
+            x: g.px + 2.0,
+            y: g.py,
+            z: g.pz,
+            yaw: 0.0,
+            pitch: 0.0,
+            hp: PLAYER_MAX_HP,
+        };
+        g.peers.insert(
+            id,
+            Peer {
+                id,
+                name: "buddy".into(),
+                st,
+                last_seen: g.time,
+            },
+        );
+    }
+
+    #[test]
+    fn crosshair_finds_a_peer_in_front() {
+        let mut g = Game3::new(9);
+        for _ in 0..100 {
+            g.tick(); // settle
+        }
+        // Clear the air around the player so nothing occludes the peer.
+        let (bx, by, bz) = (g.px as i32, g.py as i32, g.pz as i32);
+        for x in bx..=bx + 4 {
+            for y in by..by + 3 {
+                for z in bz - 1..=bz + 1 {
+                    g.world.set(x, y, z, Block::Air);
+                }
+            }
+        }
+        place_peer_in_front(&mut g, 3);
+        let (id, dist) = g.peer_in_crosshair().expect("peer under the crosshair");
+        assert_eq!(id, 3);
+        assert!((1.0..2.5).contains(&dist), "unexpected distance {dist}");
+
+        // A block between us hides them again.
+        g.world.set(bx + 1, by + 1, bz, Block::Stone);
+        assert!(g.peer_in_crosshair().is_none());
+    }
+
+    #[test]
+    fn mining_through_a_peer_does_not_break_blocks() {
+        let mut g = Game3::new(9);
+        for _ in 0..100 {
+            g.tick();
+        }
+        g.pitch = -1.45; // look nearly straight down
+        let below = g.target().expect("ground in reach");
+        // Put the peer between the player and that block.
+        g.peers.insert(
+            7,
+            Peer {
+                id: 7,
+                name: "shield".into(),
+                st: PlayerState {
+                    x: g.px,
+                    y: g.py - 1.4,
+                    z: g.pz,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    hp: PLAYER_MAX_HP,
+                },
+                last_seen: g.time,
+            },
+        );
+        assert!(g.peer_in_crosshair().is_some());
+        g.mine();
+        assert_ne!(
+            g.world.get(below.x, below.y, below.z),
+            Block::Air,
+            "the punch should not also mine the block behind them"
+        );
+    }
+
+    #[test]
+    fn peers_expire_when_they_go_quiet() {
+        let mut g = Game3::new(9);
+        place_peer_in_front(&mut g, 2);
+        assert_eq!(g.peers.len(), 1);
+        // No net link, so net_sync is a no-op; age the peer by hand.
+        g.time += PEER_TIMEOUT + 1;
+        let now = g.time;
+        g.peers
+            .retain(|_, p| now.saturating_sub(p.last_seen) < PEER_TIMEOUT);
+        assert!(g.peers.is_empty());
+    }
+
+    #[test]
+    fn chat_typing_does_not_leak_into_the_game() {
+        let mut g = Game3::new(9);
+        g.chat_open = true;
+        for c in "quit x".chars() {
+            g.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(g.chat_input, "quit x");
+        assert!(!g.should_quit, "typing 'q' must not quit");
+        g.on_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(g.chat_input, "quit ");
+        // Enter posts the line locally even in single player.
+        g.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!g.chat_open);
+        assert_eq!(g.recent_chat().len(), 1);
+        assert_eq!(g.recent_chat()[0].1, "quit");
+    }
+
+    #[test]
+    fn guests_never_write_the_hosts_save() {
+        let mut g = Game3::new(9);
+        g.set_save(PathBuf::from("/definitely/not/writable/world.json"), false);
+        assert!(!g.owns_save());
+        assert!(g.save().is_err());
+    }
+
+    #[test]
+    fn ray_aabb_hits_and_misses() {
+        let min = (1.0, 0.0, -0.5);
+        let max = (2.0, 1.8, 0.5);
+        let t = ray_aabb((0.0, 1.0, 0.0), (1.0, 0.0, 0.0), min, max).expect("straight-on hit");
+        assert!((t - 1.0).abs() < 1e-3);
+        // Pointing away misses.
+        assert!(ray_aabb((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0), min, max).is_none());
+        // Passing above misses.
+        assert!(ray_aabb((0.0, 3.0, 0.0), (1.0, 0.0, 0.0), min, max).is_none());
     }
 
     #[test]

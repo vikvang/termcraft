@@ -14,6 +14,7 @@ A Minecraft-inspired sandbox game that runs entirely in your terminal — in fir
 - Real lighting: dark caves, torch glow, day/night cycle with dusk/dawn sky
 - Gravity, jumping, swimming, fall damage, health regen
 - Crafting: planks, torches, stone bricks
+- Multiplayer: two terminals on the same seed play in the same live world
 - Autosaves to `~/.termcraft/save3d.json` on quit
 
 ### 2D mode (`--2d`)
@@ -51,19 +52,47 @@ cargo install --path .
 ```
 termcraft            # 3D, resume saved world (or create one)
 termcraft --new      # fresh 3D world
-termcraft --seed 42  # fresh world with a specific seed
+termcraft --seed 42  # shared world with a specific seed (multiplayer)
 termcraft --2d       # classic 2D side-view mode
 ```
+
+## Multiplayer
+
+Run the same seed in two terminals and you're in the same world:
+
+```sh
+termcraft --seed 7           # terminal 1 - hosts the world
+termcraft --seed 7           # terminal 2 - joins it
+termcraft --seed 7 --name jo # pick the name others see
+```
+
+The first process to claim the seed's port hosts the world and is the
+authority; everyone else downloads the host's copy on join, so all edits line
+up. You'll see each other's avatars (with floating nametags and health), every
+mined or placed block is shared instantly, and the day/night clock is synced.
+
+- `t` — chat with everyone in the world
+- `Tab` — player list with health and distance
+- `x` aimed at a player — punch them
+
+Shared-seed worlds persist in `~/.termcraft/world-<seed>.json`. Only the host
+writes that file; guests never touch it. Add `--new` to start the shared world
+from scratch, or `--solo` to ignore multiplayer entirely.
+
+Across a LAN, the host adds `--open` and everyone else joins with
+`termcraft --seed 7 --join <host-ip>`. Multiplayer is 3D-only.
 
 ## 3D Controls
 
 - `w` / `a` / `s` / `d` — move (relative to where you're looking)
 - arrow keys — look around (or drag the mouse)
 - `space` — jump (swim up in water)
-- `x` / `Enter` / left-click — mine the block under the crosshair
+- `x` / `Enter` / left-click — mine the block under the crosshair (or punch the player you're aiming at)
 - `z` / right-click — place selected block against the targeted face
 - `1`–`9` — select hotbar slot
 - `c` — crafting menu
+- `t` — chat (multiplayer)
+- `Tab` — player list
 - `F5` / `Ctrl+S` — save
 - `q` / `Esc` — quit (autosaves)
 
