@@ -37,6 +37,7 @@ USAGE:
 
 OPTIONS:
   --2d           Play the classic 2D side-view mode
+  --creative     3D creative mode: always fly, no gravity or fall damage
   --new          Start a fresh world (ignores the saved one)
   --seed <N>     Shared world seed - see MULTIPLAYER below
   --name <NAME>  Name other players see (default: $USER)
@@ -61,7 +62,8 @@ MULTIPLAYER:
 3D CONTROLS:
   w / a / s / d  move (relative to where you're looking)
   arrow keys     look around (or drag the mouse)
-  space          jump (swim up in water)
+  space          jump (swim up in water); rise in --creative
+  f              descend (creative mode only)
   x / Enter      mine the block under the crosshair (or left-click),
                  or punch the player you're aiming at
   z              place selected block against the targeted face
@@ -71,6 +73,10 @@ MULTIPLAYER:
   Tab            player list
   F5 / Ctrl+S    save
   q / Esc        quit
+
+CREATIVE (--creative, 3D only):
+  Always flying: no gravity, no fall damage, still collides with blocks.
+  w/a/s/d fly relative to look (including pitch). space rises, f descends.
 
 2D CONTROLS (--2d):
   a / d          move left / right
@@ -102,9 +108,10 @@ fn restore_terminal() {
 }
 
 fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+let args: Vec<String> = std::env::args().skip(1).collect();
     let mut force_new = false;
     let mut mode_2d = false;
+    let mut creative = false;
     let mut seed: Option<u64> = None;
     let mut solo = false;
     let mut net_opts = NetOpts::default();
@@ -120,6 +127,7 @@ fn main() -> io::Result<()> {
                 return Ok(());
             }
             "--2d" => mode_2d = true,
+            "--creative" => creative = true,
             "--new" => force_new = true,
             "--solo" => solo = true,
             "--open" => net_opts.open = true,
@@ -187,6 +195,9 @@ fn main() -> io::Result<()> {
                 None => Game3::load().unwrap_or_else(|| Game3::new(default_seed())),
             },
         };
+if creative {
+            game.set_creative(true);
+        }
         let (mut terminal, hold_keys) = setup_terminal()?;
         game.set_hold_mode(hold_keys);
         let result = run3(&mut terminal, &mut game);

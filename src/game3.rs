@@ -177,7 +177,9 @@ pub struct Game3 {
     pub vz: f32,
     pub yaw: f32,
     pub pitch: f32,
-    pub on_ground: bool,
+pub on_ground: bool,
+    /// Creative: always flying, no gravity/fall damage, look-relative fly.
+    pub creative: bool,
     pub hp: i32,
     // items
     pub inv: BTreeMap<Block, u32>,
@@ -216,7 +218,11 @@ pub struct Game3 {
     held_s: KeyHold,
     held_a: KeyHold,
     held_d: KeyHold,
-    held_jump: KeyHold,
+held_jump: KeyHold,
+    /// Descend while flying in creative mode.
+    held_down: KeyHold,
+    /// Vertical fly intent for non-hold terminals (+1 up / -1 down).
+    fly_vertical: f32,
     /// Set once any key release event arrives, proving the terminal
     /// actually reports them.
     saw_release: bool,
@@ -249,7 +255,8 @@ impl Game3 {
             vz: 0.0,
             yaw: 0.0,
             pitch: 0.0,
-            on_ground: false,
+on_ground: false,
+            creative: false,
             hp: PLAYER_MAX_HP,
             inv: BTreeMap::new(),
             hotbar: [None; 9],
@@ -269,7 +276,9 @@ impl Game3 {
             held_s: KeyHold::default(),
             held_a: KeyHold::default(),
             held_d: KeyHold::default(),
-            held_jump: KeyHold::default(),
+held_jump: KeyHold::default(),
+            held_down: KeyHold::default(),
+            fly_vertical: 0.0,
             saw_release: false,
             swim_blocked: false,
             last_damage_tick: 0,
@@ -291,8 +300,18 @@ impl Game3 {
         self.msg = Some((s.to_string(), self.time + 80));
     }
 
-    pub fn set_hold_mode(&mut self, on: bool) {
+pub fn set_hold_mode(&mut self, on: bool) {
         self.hold_mode = on;
+    }
+
+    /// Creative mode: always flying, no gravity or fall damage.
+    pub fn set_creative(&mut self, on: bool) {
+        self.creative = on;
+        if on {
+            self.vy = 0.0;
+            self.on_ground = false;
+            self.say("Creative mode: WASD fly, space up, f down.");
+        }
     }
 
     pub fn daylight(&self) -> f32 {
@@ -746,8 +765,9 @@ impl Game3 {
                 KeyCode::Char('w') | KeyCode::Char('W') => self.held_w.release(),
                 KeyCode::Char('s') | KeyCode::Char('S') => self.held_s.release(),
                 KeyCode::Char('a') | KeyCode::Char('A') => self.held_a.release(),
-                KeyCode::Char('d') | KeyCode::Char('D') => self.held_d.release(),
+KeyCode::Char('d') | KeyCode::Char('D') => self.held_d.release(),
                 KeyCode::Char(' ') => self.held_jump.release(),
+                KeyCode::Char('f') | KeyCode::Char('F') => self.held_down.release(),
                 _ => {}
             }
             return;
@@ -832,9 +852,21 @@ impl Game3 {
                 self.move_strafe = 1.0;
                 self.move_timer = 4;
             }
-            KeyCode::Char(' ') => {
+KeyCode::Char(' ') => {
                 self.held_jump.press(self.time);
-                self.jump_or_swim();
+                if self.creative {
+                    self.fly_vertical = 1.0;
+                    self.move_timer = 4;
+                } else {
+                    self.jump_or_swim();
+                }
+            }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                self.held_down.press(self.time);
+                if self.creative {
+                    self.fly_vertical = -1.0;
+                    self.move_timer = 4;
+                }
             }
             KeyCode::Left => self.yaw -= LOOK_STEP,
             KeyCode::Right => self.yaw += LOOK_STEP,
@@ -901,76 +933,133 @@ impl Game3 {
         self.time += 1;
         self.net_sync();
 
-        // Movement intent relative to yaw (horizontal only). In hold mode the
-        // held key flags drive movement continuously; otherwise fall back to a
-        // short timer refreshed by key auto-repeat.
-        let (mf, ms) = if self.hold_mode {
+// Movement intent. In hold mode the held key flags drive movement
+        // continuously; otherwise fall back to a short timer refreshed by
+        // key auto-repeat.
+        let (mf, ms, mu) = if self.hold_mode {
             let trust = self.saw_release;
             (
                 (self.held_w.active(self.time, trust) as i32
                     - self.held_s.active(self.time, trust) as i32) as f32,
                 (self.held_d.active(self.time, trust) as i32
                     - self.held_a.active(self.time, trust) as i32) as f32,
+                if self.creative {
+                    (self.held_jump.active(self.time, trust) as i32
+                        - self.held_down.active(self.time, trust) as i32)
+                        as f32
+                } else {
+                    0.0
+                },
             )
         } else if self.move_timer > 0 {
             self.move_timer -= 1;
-            (self.move_fwd, self.move_strafe)
+            (
+                self.move_fwd,
+                self.move_strafe,
+                if self.creative {
+                    self.fly_vertical
+                } else {
+                    0.0
+                },
+            )
         } else {
             self.move_fwd = 0.0;
             self.move_strafe = 0.0;
-            (0.0, 0.0)
+            self.fly_vertical = 0.0;
+            (0.0, 0.0, 0.0)
         };
-        if mf != 0.0 || ms != 0.0 {
+
+        if self.creative {
+            // Fly where you look: WASD includes pitch; space/f are world up/down.
+            let (fwd_x, fwd_y, fwd_z) = self.forward();
             let (sy, cy) = self.yaw.sin_cos();
-            let fx = cy * mf - sy * ms;
-            let fz = sy * mf + cy * ms;
-            let len = (fx * fx + fz * fz).sqrt().max(0.001);
-            let speed = if self.in_water() { MOVE_SPEED * 0.6 } else { MOVE_SPEED };
-            self.vx = fx / len * speed;
-            self.vz = fz / len * speed;
-        }
-        // Horizontal movement first, so we know whether we're pushing
-        // against a bank while swimming.
-        let blocked_x = self.step_axis(0, self.vx);
-        if blocked_x {
+            let (rx, rz) = (-sy, cy);
+            let mut dx = fwd_x * mf + rx * ms;
+            let mut dy = fwd_y * mf + mu;
+            let mut dz = fwd_z * mf + rz * ms;
+            let len = (dx * dx + dy * dy + dz * dz).sqrt();
+            if len > 0.001 {
+                dx = dx / len * MOVE_SPEED;
+                dy = dy / len * MOVE_SPEED;
+                dz = dz / len * MOVE_SPEED;
+            } else {
+                dx = 0.0;
+                dy = 0.0;
+                dz = 0.0;
+            }
+            if self.step_axis(0, dx) {
+                dx = 0.0;
+            }
+            if self.step_axis(1, dy) {
+                dy = 0.0;
+            }
+            if self.step_axis(2, dz) {
+                dz = 0.0;
+            }
+            let _ = (dx, dy, dz);
+            // No gravity, no residual velocity, no fall damage.
             self.vx = 0.0;
-        }
-        let blocked_z = self.step_axis(2, self.vz);
-        if blocked_z {
+            self.vy = 0.0;
             self.vz = 0.0;
-        }
-        self.swim_blocked = (blocked_x || blocked_z) && self.in_water();
-
-        // Holding space keeps jumping / swimming up.
-        if self.hold_mode && self.held_jump.active(self.time, self.saw_release) {
-            self.jump_or_swim();
-        }
-
-        // Gravity / buoyancy.
-        if self.in_water() {
-            self.vy = (self.vy - GRAVITY * 0.25).clamp(-0.18, SWIM_MAX_RISE);
+            self.on_ground = false;
+            self.swim_blocked = false;
         } else {
-            self.vy = (self.vy - GRAVITY).max(MAX_FALL);
-        }
-        let falling = self.vy;
-        self.on_ground = false;
-        if self.step_axis(1, self.vy) {
-            if self.vy < 0.0 {
-                self.on_ground = true;
-                if falling < SAFE_FALL && !self.in_water() {
-                    let dmg = ((SAFE_FALL - falling) * 22.0) as i32;
-                    if dmg > 0 {
-                        self.hp -= dmg;
-                        self.last_damage_tick = self.time;
-                        self.say("Ouch! Fall damage.");
+            if mf != 0.0 || ms != 0.0 {
+                let (sy, cy) = self.yaw.sin_cos();
+                let fx = cy * mf - sy * ms;
+                let fz = sy * mf + cy * ms;
+                let len = (fx * fx + fz * fz).sqrt().max(0.001);
+                let speed = if self.in_water() {
+                    MOVE_SPEED * 0.6
+                } else {
+                    MOVE_SPEED
+                };
+                self.vx = fx / len * speed;
+                self.vz = fz / len * speed;
+            }
+            // Horizontal movement first, so we know whether we're pushing
+            // against a bank while swimming.
+            let blocked_x = self.step_axis(0, self.vx);
+            if blocked_x {
+                self.vx = 0.0;
+            }
+            let blocked_z = self.step_axis(2, self.vz);
+            if blocked_z {
+                self.vz = 0.0;
+            }
+            self.swim_blocked = (blocked_x || blocked_z) && self.in_water();
+
+            // Holding space keeps jumping / swimming up.
+            if self.hold_mode && self.held_jump.active(self.time, self.saw_release) {
+                self.jump_or_swim();
+            }
+
+            // Gravity / buoyancy.
+            if self.in_water() {
+                self.vy = (self.vy - GRAVITY * 0.25).clamp(-0.18, SWIM_MAX_RISE);
+            } else {
+                self.vy = (self.vy - GRAVITY).max(MAX_FALL);
+            }
+            let falling = self.vy;
+            self.on_ground = false;
+            if self.step_axis(1, self.vy) {
+                if self.vy < 0.0 {
+                    self.on_ground = true;
+                    if falling < SAFE_FALL && !self.in_water() {
+                        let dmg = ((SAFE_FALL - falling) * 22.0) as i32;
+                        if dmg > 0 {
+                            self.hp -= dmg;
+                            self.last_damage_tick = self.time;
+                            self.say("Ouch! Fall damage.");
+                        }
                     }
                 }
+                self.vy = 0.0;
             }
-            self.vy = 0.0;
+            // Friction.
+            self.vx *= 0.5;
+            self.vz *= 0.5;
         }
-        // Friction.
-        self.vx *= 0.5;
-        self.vz *= 0.5;
 
         // Regen.
         if self.hp < PLAYER_MAX_HP
@@ -1099,7 +1188,7 @@ pub fn seed_save_path(seed: u64) -> PathBuf {
 mod tests {
     use super::*;
 
-    #[test]
+#[test]
     fn player_settles_on_ground() {
         let mut g = Game3::new(9);
         for _ in 0..200 {
@@ -1107,6 +1196,36 @@ mod tests {
         }
         assert!(g.on_ground || g.in_water());
         assert!(g.py > 0.0);
+    }
+
+    #[test]
+    fn creative_idle_in_air_does_not_fall_and_space_raises() {
+        let mut g = Game3::new(9);
+        g.set_creative(true);
+        g.set_hold_mode(true);
+        enable_trusted_releases(&mut g);
+        // Hover well above the world with no vertical velocity.
+        g.py = 40.0;
+        g.vy = 0.0;
+        let idle_y = g.py;
+        for _ in 0..40 {
+            g.tick();
+        }
+        assert!(
+            (g.py - idle_y).abs() < 0.01,
+            "creative idle must not fall: was {idle_y}, now {}",
+            g.py
+        );
+
+        g.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        for _ in 0..20 {
+            g.tick();
+        }
+        assert!(
+            g.py > idle_y + 1.0,
+            "space should raise py in creative: was {idle_y}, now {}",
+            g.py
+        );
     }
 
     #[test]
