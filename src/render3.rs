@@ -344,32 +344,52 @@ pub fn draw(f: &mut Frame, g: &mut Game3) {
         draw_crafting(f, g, area);
     }
     if g.help_open {
-        draw_help(
-            f,
-            area,
+        // Creative rewrites the movement bindings; keep survival text otherwise.
+        let movement: &[(&str, &str)] = if g.creative {
+            &[
+                ("Movement", ""),
+                ("  w / a / s / d", "fly where you look (includes pitch)"),
+                ("  arrow keys", "look around (or drag the mouse)"),
+                ("  space", "rise (hold to keep rising)"),
+                ("  f", "descend (hold to keep descending)"),
+            ]
+        } else {
             &[
                 ("Movement", ""),
                 ("  w / a / s / d", "move (relative to where you look)"),
                 ("  arrow keys", "look around (or drag the mouse)"),
                 ("  space", "jump / swim up (hold to keep jumping)"),
-                ("Actions", ""),
-                ("  x / Enter / left-click", "mine the block under the crosshair"),
-                ("  z / right-click", "place selected block on targeted face"),
-                ("  1-9", "select hotbar slot"),
-                ("  c", "crafting menu"),
-                ("Multiplayer", ""),
-                ("  --seed <N>", "same seed = same shared world"),
-                ("  t", "chat with everyone in the world"),
-                ("  Tab", "who's online"),
-                ("  x on a player", "punch them"),
-                ("Game", ""),
-                ("  F5 / Ctrl+S", "save"),
-                ("  h / ?", "toggle this help"),
-                ("  q / Esc", "quit (autosaves)"),
-                ("", ""),
-                ("Tip", "craft torches before nightfall - caves are dark!"),
-            ],
-        );
+            ]
+        };
+        let rest: &[(&str, &str)] = &[
+            ("Actions", ""),
+            ("  x / Enter / left-click", "mine the block under the crosshair"),
+            ("  z / right-click", "place selected block on targeted face"),
+            ("  1-9", "select hotbar slot"),
+            ("  c", "crafting menu"),
+            ("Multiplayer", ""),
+            ("  --seed <N>", "same seed = same shared world"),
+            ("  t", "chat with everyone in the world"),
+            ("  Tab", "who's online"),
+            ("  x on a player", "punch them"),
+            ("Game", ""),
+            ("  F5 / Ctrl+S", "save"),
+            ("  h / ?", "toggle this help"),
+            ("  q / Esc", "quit (autosaves)"),
+            ("", ""),
+            (
+                "Tip",
+                if g.creative {
+                    "creative: no gravity or fall damage - still collides with blocks"
+                } else {
+                    "craft torches before nightfall - caves are dark!"
+                },
+            ),
+        ];
+        let mut entries = Vec::with_capacity(movement.len() + rest.len());
+        entries.extend_from_slice(movement);
+        entries.extend_from_slice(rest);
+        draw_help(f, area, &entries);
     }
     if g.game_over {
         draw_game_over(f, area);
@@ -613,6 +633,15 @@ fn draw_hud(f: &mut Frame, g: &Game3, area: Rect, hud_h: u16) {
             Style::default().fg(Color::Rgb(200, 200, 255)),
         ),
     ];
+    if g.creative {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            "✈ creative",
+            Style::default()
+                .fg(Color::Rgb(160, 210, 255))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if let Some(badge) = g.net_badge() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
@@ -690,7 +719,13 @@ fn draw_hud(f: &mut Frame, g: &Game3, area: Rect, hud_h: u16) {
         return;
     }
 
-    let help = if g.is_multiplayer() {
+    let help = if g.creative {
+        if g.is_multiplayer() {
+            "h help  w/a/s/d fly  space up  f down  x mine  z place  c craft  t chat  Tab players  q quit"
+        } else {
+            "h help  w/a/s/d fly  ←↑→↓ look  space up  f down  x mine  z place  c craft  q quit"
+        }
+    } else if g.is_multiplayer() {
         "h help  w/a/s/d move  x mine  z place  c craft  t chat  Tab players  q quit"
     } else {
         "h help  w/a/s/d move  ←↑→↓ look  space jump  x mine  z place  c craft  q quit"

@@ -53,8 +53,11 @@ cargo install --path .
 termcraft            # 3D, resume saved world (or create one)
 termcraft --new      # fresh 3D world
 termcraft --seed 42  # shared world with a specific seed (multiplayer)
+termcraft --creative # 3D creative mode: always flying, no gravity or fall damage
 termcraft --2d       # classic 2D side-view mode
 ```
+
+`--creative` only affects 3D (ignored with `--2d`). It pairs with `--new`, `--seed`, and multiplayer; inventory, mining, and HP stay the same, and you still collide with blocks.
 
 ## Multiplayer
 
@@ -84,9 +87,10 @@ Across a LAN, the host adds `--open` and everyone else joins with
 
 ## 3D Controls
 
-- `w` / `a` / `s` / `d` — move (relative to where you're looking)
+- `w` / `a` / `s` / `d` — move (relative to where you're looking; in creative, fly including pitch)
 - arrow keys — look around (or drag the mouse)
-- `space` — jump (swim up in water)
+- `space` — jump (swim up in water); in creative, rise
+- `f` — descend (creative only; hold to keep descending)
 - `x` / `Enter` / left-click — mine the block under the crosshair (or punch the player you're aiming at)
 - `z` / right-click — place selected block against the targeted face
 - `1`–`9` — select hotbar slot
