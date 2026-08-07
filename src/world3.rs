@@ -205,8 +205,7 @@ impl World3 {
                     for dz in -r..=r {
                         for dx in -r..=r {
                             if dx * dx + dy * dy + dz * dz <= r * r {
-                                let (tx, ty, tz) =
-                                    (cx as i32 + dx, cy as i32 + dy, cz as i32 + dz);
+                                let (tx, ty, tz) = (cx as i32 + dx, cy as i32 + dy, cz as i32 + dz);
                                 if (0..W3).contains(&tx)
                                     && (2..H3).contains(&ty)
                                     && (0..D3).contains(&tz)
@@ -238,7 +237,9 @@ impl World3 {
                     rng.gen_range(0..D3),
                 );
                 for _ in 0..rng.gen_range(3..8) {
-                    if (0..W3).contains(&x) && (0..H3).contains(&y) && (0..D3).contains(&z)
+                    if (0..W3).contains(&x)
+                        && (0..H3).contains(&y)
+                        && (0..D3).contains(&z)
                         && w.tiles[idx(x, y, z)] == Block::Stone
                     {
                         w.tiles[idx(x, y, z)] = ore;
@@ -269,9 +270,7 @@ impl World3 {
                             let d2 = dx * dx + dz * dz + dy * dy * 2;
                             if d2 <= 5 && !(dx == 0 && dz == 0 && dy <= 0) {
                                 let (lx, ly, lz) = (x + dx, top + dy, z + dz);
-                                if (0..H3).contains(&ly)
-                                    && w.tiles[idx(lx, ly, lz)] == Block::Air
-                                {
+                                if (0..H3).contains(&ly) && w.tiles[idx(lx, ly, lz)] == Block::Air {
                                     w.tiles[idx(lx, ly, lz)] = Block::Leaves;
                                 }
                             }

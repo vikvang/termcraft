@@ -108,7 +108,7 @@ fn restore_terminal() {
 }
 
 fn main() -> io::Result<()> {
-let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = std::env::args().skip(1).collect();
     let mut force_new = false;
     let mut mode_2d = false;
     let mut creative = false;
@@ -195,7 +195,7 @@ let args: Vec<String> = std::env::args().skip(1).collect();
                 None => Game3::load().unwrap_or_else(|| Game3::new(default_seed())),
             },
         };
-if creative {
+        if creative {
             game.set_creative(true);
         }
         let (mut terminal, hold_keys) = setup_terminal()?;
@@ -269,10 +269,7 @@ fn default_seed() -> u64 {
         .unwrap_or(42)
 }
 
-fn run(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    game: &mut Game,
-) -> io::Result<()> {
+fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mut Game) -> io::Result<()> {
     let mut last_tick = Instant::now();
     loop {
         terminal.draw(|f| render::draw(f, game))?;
@@ -303,10 +300,7 @@ fn run(
     }
 }
 
-fn run3(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    game: &mut Game3,
-) -> io::Result<()> {
+fn run3(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mut Game3) -> io::Result<()> {
     let mut last_tick = Instant::now();
     loop {
         terminal.draw(|f| render3::draw(f, game))?;

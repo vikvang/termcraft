@@ -50,8 +50,7 @@ pub fn draw(f: &mut Frame, game: &mut Game) {
     // ---- camera ----------------------------------------------------------
     let (pcx, pcy) = game.player.center();
     let cam_x = (pcx as i32 - map.width as i32 / 2).clamp(0, (WORLD_W - map.width as i32).max(0));
-    let cam_y =
-        (pcy as i32 - map.height as i32 / 2).clamp(0, (WORLD_H - map.height as i32).max(0));
+    let cam_y = (pcy as i32 - map.height as i32 / 2).clamp(0, (WORLD_H - map.height as i32).max(0));
     game.camera = (cam_x, cam_y);
 
     // ---- lighting precomputation ------------------------------------------
@@ -75,10 +74,7 @@ pub fn draw(f: &mut Frame, game: &mut Game) {
     }
 
     let light_at = |x: i32, y: i32| -> f32 {
-        let s = surf
-            .get((x - cam_x) as usize)
-            .copied()
-            .unwrap_or(WORLD_H);
+        let s = surf.get((x - cam_x) as usize).copied().unwrap_or(WORLD_H);
         let sky = if y <= s {
             day
         } else {
@@ -141,19 +137,20 @@ pub fn draw(f: &mut Frame, game: &mut Game) {
 
     // ---- entities -------------------------------------------------------------
     let draw_entity = |buf: &mut ratatui::buffer::Buffer,
-                           e: &crate::entity::Entity,
-                           head: char,
-                           body: char,
-                           color: Rgb| {
+                       e: &crate::entity::Entity,
+                       head: char,
+                       body: char,
+                       color: Rgb| {
         let tx = (e.x + e.w / 2.0).floor() as i32;
         let head_y = e.y.floor() as i32;
         let body_y = (e.y + 1.0).floor() as i32;
         for (ty, ch) in [(head_y, head), (body_y, body)] {
             if tx >= cam_x && tx < cam_x + w && ty >= cam_y && ty < cam_y + h {
                 let l = light_at(tx, ty).max(0.35);
-                if let Some(cell) =
-                    buf.cell_mut(((map.x as i32 + tx - cam_x) as u16, (map.y as i32 + ty - cam_y) as u16))
-                {
+                if let Some(cell) = buf.cell_mut((
+                    (map.x as i32 + tx - cam_x) as u16,
+                    (map.y as i32 + ty - cam_y) as u16,
+                )) {
                     cell.set_char(ch).set_fg(scale(color, l));
                 }
             }
@@ -170,9 +167,10 @@ pub fn draw(f: &mut Frame, game: &mut Game) {
     if cx >= cam_x && cx < cam_x + w && cy >= cam_y && cy < cam_y + h {
         let ok = game.cursor_in_reach();
         let tint: Rgb = if ok { (255, 255, 140) } else { (255, 90, 90) };
-        if let Some(cell) =
-            buf.cell_mut(((map.x as i32 + cx - cam_x) as u16, (map.y as i32 + cy - cam_y) as u16))
-        {
+        if let Some(cell) = buf.cell_mut((
+            (map.x as i32 + cx - cam_x) as u16,
+            (map.y as i32 + cy - cam_y) as u16,
+        )) {
             let cur_bg = match cell.bg {
                 Color::Rgb(r, g, b) => (r, g, b),
                 _ => (0, 0, 0),
@@ -209,7 +207,10 @@ pub fn draw(f: &mut Frame, game: &mut Game) {
                 ("  h / ?", "toggle this help"),
                 ("  q / Esc", "quit (autosaves)"),
                 ("", ""),
-                ("Tip", "zombies come out at night - build shelter and torches!"),
+                (
+                    "Tip",
+                    "zombies come out at night - build shelter and torches!",
+                ),
             ],
         );
     }
@@ -347,7 +348,9 @@ fn draw_crafting(f: &mut Frame, game: &Game, area: Rect) {
             Style::default().fg(Color::Rgb(110, 110, 110))
         };
         let style = if sel {
-            style.add_modifier(Modifier::BOLD).bg(Color::Rgb(50, 50, 60))
+            style
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::Rgb(50, 50, 60))
         } else {
             style
         };

@@ -111,13 +111,19 @@ pub struct Hit {
 
 /// DDA voxel raycast; hits anything that isn't air or water.
 pub fn raycast(world: &World3, o: (f32, f32, f32), d: (f32, f32, f32), max_t: f32) -> Option<Hit> {
-    let (mut ix, mut iy, mut iz) = (
-        o.0.floor() as i32,
-        o.1.floor() as i32,
-        o.2.floor() as i32,
+    let (mut ix, mut iy, mut iz) = (o.0.floor() as i32, o.1.floor() as i32, o.2.floor() as i32);
+    let step = (
+        d.0.signum() as i32,
+        d.1.signum() as i32,
+        d.2.signum() as i32,
     );
-    let step = (d.0.signum() as i32, d.1.signum() as i32, d.2.signum() as i32);
-    let inv = |v: f32| if v != 0.0 { (1.0 / v).abs() } else { f32::INFINITY };
+    let inv = |v: f32| {
+        if v != 0.0 {
+            (1.0 / v).abs()
+        } else {
+            f32::INFINITY
+        }
+    };
     let t_delta = (inv(d.0), inv(d.1), inv(d.2));
     let frac = |o: f32, d: f32, i: i32| -> f32 {
         if d > 0.0 {
@@ -177,7 +183,7 @@ pub struct Game3 {
     pub vz: f32,
     pub yaw: f32,
     pub pitch: f32,
-pub on_ground: bool,
+    pub on_ground: bool,
     /// Creative: always flying, no gravity/fall damage, look-relative fly.
     pub creative: bool,
     pub hp: i32,
@@ -218,7 +224,7 @@ pub on_ground: bool,
     held_s: KeyHold,
     held_a: KeyHold,
     held_d: KeyHold,
-held_jump: KeyHold,
+    held_jump: KeyHold,
     /// Descend while flying in creative mode.
     held_down: KeyHold,
     /// Vertical fly intent for non-hold terminals (+1 up / -1 down).
@@ -255,7 +261,7 @@ impl Game3 {
             vz: 0.0,
             yaw: 0.0,
             pitch: 0.0,
-on_ground: false,
+            on_ground: false,
             creative: false,
             hp: PLAYER_MAX_HP,
             inv: BTreeMap::new(),
@@ -276,7 +282,7 @@ on_ground: false,
             held_s: KeyHold::default(),
             held_a: KeyHold::default(),
             held_d: KeyHold::default(),
-held_jump: KeyHold::default(),
+            held_jump: KeyHold::default(),
             held_down: KeyHold::default(),
             fly_vertical: 0.0,
             saw_release: false,
@@ -300,7 +306,7 @@ held_jump: KeyHold::default(),
         self.msg = Some((s.to_string(), self.time + 80));
     }
 
-pub fn set_hold_mode(&mut self, on: bool) {
+    pub fn set_hold_mode(&mut self, on: bool) {
         self.hold_mode = on;
     }
 
@@ -385,7 +391,11 @@ pub fn set_hold_mode(&mut self, on: bool) {
     /// Short badge for the HUD, e.g. `host 2`.
     pub fn net_badge(&self) -> Option<String> {
         let net = self.net.as_ref()?;
-        Some(format!("{} {}", net.role().label(), self.peers.len().max(0)))
+        Some(format!(
+            "{} {}",
+            net.role().label(),
+            self.peers.len().max(0)
+        ))
     }
 
     pub fn log_chat(&mut self, from: &str, text: &str) {
@@ -663,7 +673,11 @@ pub fn set_hold_mode(&mut self, on: bool) {
             return;
         }
         if b.is_solid() {
-            if let Some(p) = self.peers.values().find(|p| peer_overlaps_cell(p, tx, ty, tz)) {
+            if let Some(p) = self
+                .peers
+                .values()
+                .find(|p| peer_overlaps_cell(p, tx, ty, tz))
+            {
                 let m = format!("{} is standing there!", p.name);
                 self.say(&m);
                 return;
@@ -765,7 +779,7 @@ pub fn set_hold_mode(&mut self, on: bool) {
                 KeyCode::Char('w') | KeyCode::Char('W') => self.held_w.release(),
                 KeyCode::Char('s') | KeyCode::Char('S') => self.held_s.release(),
                 KeyCode::Char('a') | KeyCode::Char('A') => self.held_a.release(),
-KeyCode::Char('d') | KeyCode::Char('D') => self.held_d.release(),
+                KeyCode::Char('d') | KeyCode::Char('D') => self.held_d.release(),
                 KeyCode::Char(' ') => self.held_jump.release(),
                 KeyCode::Char('f') | KeyCode::Char('F') => self.held_down.release(),
                 _ => {}
@@ -852,7 +866,7 @@ KeyCode::Char('d') | KeyCode::Char('D') => self.held_d.release(),
                 self.move_strafe = 1.0;
                 self.move_timer = 4;
             }
-KeyCode::Char(' ') => {
+            KeyCode::Char(' ') => {
                 self.held_jump.press(self.time);
                 if self.creative {
                     self.fly_vertical = 1.0;
@@ -933,7 +947,7 @@ KeyCode::Char(' ') => {
         self.time += 1;
         self.net_sync();
 
-// Movement intent. In hold mode the held key flags drive movement
+        // Movement intent. In hold mode the held key flags drive movement
         // continuously; otherwise fall back to a short timer refreshed by
         // key auto-repeat.
         let (mf, ms, mu) = if self.hold_mode {
@@ -945,8 +959,7 @@ KeyCode::Char(' ') => {
                     - self.held_a.active(self.time, trust) as i32) as f32,
                 if self.creative {
                     (self.held_jump.active(self.time, trust) as i32
-                        - self.held_down.active(self.time, trust) as i32)
-                        as f32
+                        - self.held_down.active(self.time, trust) as i32) as f32
                 } else {
                     0.0
                 },
@@ -1173,7 +1186,9 @@ struct Save3 {
 }
 
 pub fn save3_path() -> PathBuf {
-    crate::game::home_dir().join(".termcraft").join("save3d.json")
+    crate::game::home_dir()
+        .join(".termcraft")
+        .join("save3d.json")
 }
 
 /// Worlds played with an explicit seed get their own file, so a shared seed
@@ -1188,7 +1203,7 @@ pub fn seed_save_path(seed: u64) -> PathBuf {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn player_settles_on_ground() {
         let mut g = Game3::new(9);
         for _ in 0..200 {
@@ -1351,7 +1366,10 @@ mod tests {
             g.tick();
         }
         let drift = (g.px - stopped_at.0).hypot(g.pz - stopped_at.1);
-        assert!(drift < 0.2, "expected to stop after release, drifted {drift}");
+        assert!(
+            drift < 0.2,
+            "expected to stop after release, drifted {drift}"
+        );
     }
 
     #[test]
@@ -1377,7 +1395,10 @@ mod tests {
             }
         }
         let drift = (g.px - pos.0).hypot(g.pz - pos.1);
-        assert!(drift < 0.2, "still moving without key repeats, drifted {drift}");
+        assert!(
+            drift < 0.2,
+            "still moving without key repeats, drifted {drift}"
+        );
         assert!(!jumped, "still jumping without key repeats");
     }
 

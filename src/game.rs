@@ -78,8 +78,7 @@ impl KeyHold {
     }
 
     pub fn active(&self, now: u64, trust_releases: bool) -> bool {
-        self.down
-            && (trust_releases || now.saturating_sub(self.last_seen) <= HOLD_GRACE_TICKS)
+        self.down && (trust_releases || now.saturating_sub(self.last_seen) <= HOLD_GRACE_TICKS)
     }
 }
 
@@ -236,13 +235,13 @@ impl Game {
             return;
         }
         // Attack a zombie first if one is at the cursor.
-        if let Some(z) = self
-            .zombies
-            .iter_mut()
-            .find(|z| z.overlaps_tile(tx, ty))
-        {
+        if let Some(z) = self.zombies.iter_mut().find(|z| z.overlaps_tile(tx, ty)) {
             z.hp -= 5;
-            let kb = if z.center().0 > self.player.center().0 { 0.8 } else { -0.8 };
+            let kb = if z.center().0 > self.player.center().0 {
+                0.8
+            } else {
+                -0.8
+            };
             z.vx += kb;
             z.vy -= 0.3;
             if z.hp <= 0 {
@@ -442,10 +441,7 @@ impl Game {
         }
         let wx = self.camera.0 + (m.column - a.x) as i32;
         let wy = self.camera.1 + (m.row - a.y) as i32;
-        self.cursor = (
-            wx.clamp(0, WORLD_W - 1),
-            wy.clamp(0, WORLD_H - 1),
-        );
+        self.cursor = (wx.clamp(0, WORLD_W - 1), wy.clamp(0, WORLD_H - 1));
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => self.mine(),
             MouseEventKind::Down(MouseButton::Right) => self.place(),
@@ -524,10 +520,17 @@ impl Game {
         if self.is_night() && self.zombies.len() < MAX_ZOMBIES && self.time.is_multiple_of(60) {
             let px = self.player.center().0 as i32;
             let dist = self.rng.gen_range(18..40);
-            let sx = if self.rng.gen_bool(0.5) { px + dist } else { px - dist };
+            let sx = if self.rng.gen_bool(0.5) {
+                px + dist
+            } else {
+                px - dist
+            };
             if (1..WORLD_W - 1).contains(&sx) {
                 let sy = self.world.surface_at(sx);
-                if sy < WORLD_H - 4 && self.world.get(sx, sy) != Block::Water && sy <= SEA_LEVEL + 20 {
+                if sy < WORLD_H - 4
+                    && self.world.get(sx, sy) != Block::Water
+                    && sy <= SEA_LEVEL + 20
+                {
                     let z = Entity::new(sx as f32 + 0.1, sy as f32 - 2.0, ZOMBIE_MAX_HP);
                     self.zombies.push(z);
                 }

@@ -1,9 +1,9 @@
 # ❤️ Built with warp.dev
 [package]
 name = "termcraft-3d"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-description = "A Minecraft-inspired first-person 3D sandbox game for your terminal, with seed-based multiplayer"
+description = "A Minecraft-inspired first-person 3D sandbox game for your terminal, with seed-based multiplayer and creative fly mode"
 license = "MIT"
 repository = "https://github.com/vikvang/termcraft"
 readme = "README.md"
